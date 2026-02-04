@@ -3,13 +3,12 @@ Dataset Augmentation Pipeline for VLoad Weight Estimation
 ==========================================================
 
 This script performs the following operations:
-1. Splits each video from the original dataset into 2 halves
+1. Splits each video from the original dataset into N clips (configurable, default 4)
 2. Resizes all frames to target size (224x224)
-3. Applies horizontal flip augmentation to each half
-4. Pads all videos to have uniform frame count
+3. Applies horizontal flip augmentation to each clip
 
-Original: 144 videos (3 classes × 8 operators × 2 actions × 3 angles)
-After split: 288 videos (× 2)
+Original: 72 walk videos (3 classes × 8 operators × 1 action × 3 angles)
+After split (4 clips): 288 videos (× 4)
 After flip: 576 videos (× 2)
 """
 
@@ -43,7 +42,7 @@ class AugmentationConfig:
     output_dir: str = "Augmented_Dataset"
     
     # Video processing
-    split_ratio: float = 0.5  # Split videos at 50%
+    num_splits: int = 4  # Number of clips to split each video into
     apply_horizontal_flip: bool = True
     
     # Resize options
@@ -152,25 +151,36 @@ class VideoProcessor:
         out.release()
         return True
     
-    def split_video(self, frames: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def split_video(self, frames: np.ndarray) -> List[np.ndarray]:
         """
-        Split video frames into two halves.
+        Split video frames into N equal clips.
         
         Args:
             frames: Array of frames [N, H, W, C]
             
         Returns:
-            Tuple of (first_half, second_half)
+            List of frame arrays, one for each clip
         """
-        split_idx = int(len(frames) * self.config.split_ratio)
+        num_splits = self.config.num_splits
+        total_frames = len(frames)
         
-        # Ensure at least 1 frame in each half
-        split_idx = max(1, min(split_idx, len(frames) - 1))
+        # Calculate frames per clip
+        frames_per_clip = total_frames // num_splits
         
-        first_half = frames[:split_idx]
-        second_half = frames[split_idx:]
+        clips = []
+        for i in range(num_splits):
+            start_idx = i * frames_per_clip
+            # Last clip gets any remaining frames
+            if i == num_splits - 1:
+                end_idx = total_frames
+            else:
+                end_idx = start_idx + frames_per_clip
+            
+            clip = frames[start_idx:end_idx]
+            if len(clip) > 0:  # Ensure non-empty clip
+                clips.append(clip)
         
-        return first_half, second_half
+        return clips
     
     def resize_frames(self, frames: np.ndarray) -> np.ndarray:
         """
@@ -331,11 +341,13 @@ class DatasetAugmentor:
         
         self.frame_counts = frame_counts
         
-        # After splitting, each half will have approximately half the frames
-        half_frame_counts = [fc // 2 for fc in frame_counts]
+        # After splitting, each clip will have approximately 1/num_splits of the frames
+        num_splits = self.config.num_splits
+        clip_frame_counts = [fc // num_splits for fc in frame_counts]
         
         stats = {
             "total_videos": len(videos),
+            "num_splits": num_splits,
             "original_frame_stats": {
                 "min": min(frame_counts) if frame_counts else 0,
                 "max": max(frame_counts) if frame_counts else 0,
@@ -343,17 +355,17 @@ class DatasetAugmentor:
                 "std": np.std(frame_counts) if frame_counts else 0
             },
             "after_split_stats": {
-                "min": min(half_frame_counts) if half_frame_counts else 0,
-                "max": max(half_frame_counts) if half_frame_counts else 0,
-                "mean": np.mean(half_frame_counts) if half_frame_counts else 0
+                "min": min(clip_frame_counts) if clip_frame_counts else 0,
+                "max": max(clip_frame_counts) if clip_frame_counts else 0,
+                "mean": np.mean(clip_frame_counts) if clip_frame_counts else 0
             },
-            "target_frames": max(half_frame_counts) if half_frame_counts else 0
+            "target_frames": max(clip_frame_counts) if clip_frame_counts else 0
         }
         
         logger.info(f"Original frame counts: min={stats['original_frame_stats']['min']}, "
                    f"max={stats['original_frame_stats']['max']}, "
                    f"mean={stats['original_frame_stats']['mean']:.1f}")
-        logger.info(f"After split: min={stats['after_split_stats']['min']}, "
+        logger.info(f"After {num_splits}-way split: min={stats['after_split_stats']['min']}, "
                    f"max={stats['after_split_stats']['max']}")
         logger.info(f"Target frame count for padding: {stats['target_frames']}")
         
@@ -361,15 +373,13 @@ class DatasetAugmentor:
     
     def process_single_video(
         self, 
-        video_info: Dict, 
-        target_frames: int
+        video_info: Dict
     ) -> List[Dict]:
         """
-        Process a single video: split, augment, and pad.
+        Process a single video: split, resize, and augment.
         
         Args:
             video_info: Video information dictionary
-            target_frames: Target frame count for padding
             
         Returns:
             List of output video information
@@ -384,41 +394,38 @@ class DatasetAugmentor:
             # Resize frames to target size (224x224)
             frames = self.processor.resize_frames(frames)
             
-            # Split video
-            first_half, second_half = self.processor.split_video(frames)
+            # Split video into N clips
+            clips = self.processor.split_video(frames)
             
             # Create output paths
             output_base = Path(self.config.output_dir)
             class_dir = output_base / video_info["class"] / video_info["operator"] / video_info["action"]
             
-            # Process each half
-            for half_idx, half_frames in enumerate([first_half, second_half], 1):
-                half_name = f"part{half_idx}"
+            # Process each clip
+            for clip_idx, clip_frames in enumerate(clips, 1):
+                clip_name = f"part{clip_idx}"
                 
-                # Pad to target length
-                padded_frames = self.processor.pad_video(half_frames, target_frames)
-                
-                # Save original
-                output_name = f"{video_info['angle']}_{half_name}.{self.config.output_format}"
+                # Save original (no padding)
+                output_name = f"{video_info['angle']}_{clip_name}.{self.config.output_format}"
                 output_path = class_dir / output_name
                 
-                if self.processor.write_video(padded_frames, str(output_path), fps):
+                if self.processor.write_video(clip_frames, str(output_path), fps):
                     output_videos.append({
                         "path": str(output_path),
                         "class": video_info["class"],
                         "operator": video_info["operator"],
                         "action": video_info["action"],
                         "angle": video_info["angle"],
-                        "part": half_name,
+                        "part": clip_name,
                         "augmentation": "original",
-                        "frame_count": len(padded_frames)
+                        "frame_count": len(clip_frames)
                     })
                 
                 # Apply horizontal flip if enabled
                 if self.config.apply_horizontal_flip:
-                    flipped_frames = self.processor.horizontal_flip(padded_frames)
+                    flipped_frames = self.processor.horizontal_flip(clip_frames)
                     
-                    output_name_flip = f"{video_info['angle']}_{half_name}_hflip.{self.config.output_format}"
+                    output_name_flip = f"{video_info['angle']}_{clip_name}_hflip.{self.config.output_format}"
                     output_path_flip = class_dir / output_name_flip
                     
                     if self.processor.write_video(flipped_frames, str(output_path_flip), fps):
@@ -428,7 +435,7 @@ class DatasetAugmentor:
                             "operator": video_info["operator"],
                             "action": video_info["action"],
                             "angle": video_info["angle"],
-                            "part": half_name,
+                            "part": clip_name,
                             "augmentation": "horizontal_flip",
                             "frame_count": len(flipped_frames)
                         })
@@ -458,7 +465,6 @@ class DatasetAugmentor:
         
         # Step 2: Analyze videos
         stats = self.analyze_videos(videos)
-        target_frames = stats["target_frames"]
         
         # Step 3: Create output directory
         output_path = Path(self.config.output_dir)
@@ -467,12 +473,12 @@ class DatasetAugmentor:
             shutil.rmtree(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        # Step 4: Process all videos
+        # Step 4: Process all videos (no padding applied)
         logger.info("Processing videos...")
         all_output_videos = []
         
         for video_info in tqdm(videos, desc="Augmenting videos"):
-            output_videos = self.process_single_video(video_info, target_frames)
+            output_videos = self.process_single_video(video_info)
             all_output_videos.extend(output_videos)
         
         # Step 5: Generate summary
@@ -485,10 +491,8 @@ class DatasetAugmentor:
                 "config": {
                     "input_dir": self.config.input_dir,
                     "output_dir": self.config.output_dir,
-                    "split_ratio": self.config.split_ratio,
+                    "num_splits": self.config.num_splits,
                     "horizontal_flip": self.config.apply_horizontal_flip,
-                    "padding_mode": self.config.padding_mode,
-                    "target_frames": target_frames,
                     "target_size": list(self.config.target_size),
                     "interpolation": self.config.interpolation
                 },
@@ -518,14 +522,22 @@ class DatasetAugmentor:
             cls = video["class"]
             class_counts[cls] = class_counts.get(cls, 0) + 1
         
+        # Collect frame counts from output videos
+        frame_counts = [v["frame_count"] for v in output_videos]
+        
         summary = {
             "input_videos": len(input_videos),
             "output_videos": len(output_videos),
             "multiplication_factor": len(output_videos) / len(input_videos) if input_videos else 0,
-            "target_frame_count": stats["target_frames"],
+            "num_splits": self.config.num_splits,
             "target_size": list(self.config.target_size),
             "videos_per_class": class_counts,
-            "augmentations_applied": ["split_in_half", "resize"]
+            "frame_count_stats": {
+                "min": min(frame_counts) if frame_counts else 0,
+                "max": max(frame_counts) if frame_counts else 0,
+                "mean": np.mean(frame_counts) if frame_counts else 0
+            },
+            "augmentations_applied": [f"split_into_{self.config.num_splits}_clips", "resize"]
         }
         
         if self.config.apply_horizontal_flip:
@@ -536,7 +548,7 @@ class DatasetAugmentor:
         logger.info(f"Multiplication factor: {summary['multiplication_factor']}x")
         logger.info(f"Videos per class: {class_counts}")
         logger.info(f"Frame size: {self.config.target_size[0]}x{self.config.target_size[1]}")
-        logger.info(f"All videos padded to: {summary['target_frame_count']} frames")
+        logger.info(f"Frame counts - min: {summary['frame_count_stats']['min']}, max: {summary['frame_count_stats']['max']}, mean: {summary['frame_count_stats']['mean']:.1f}")
         
         return summary
 
@@ -548,7 +560,7 @@ def main():
     config = AugmentationConfig(
         input_dir="dataset_weight_estimation/dataset_weight_estimation",
         output_dir="Augmented_Dataset",
-        split_ratio=0.5,
+        num_splits=4,                      # Split each video into 4 clips
         apply_horizontal_flip=True,
         target_size=(224, 224),           # Resize to 224x224
         interpolation="bilinear",          # Interpolation method
@@ -568,7 +580,7 @@ def main():
     print(f"✓ Augmented videos: {summary['output_videos']}")
     print(f"✓ Data multiplication: {summary['multiplication_factor']}x")
     print(f"✓ Frame size: {summary['target_size'][0]}x{summary['target_size'][1]}")
-    print(f"✓ Uniform frame count: {summary['target_frame_count']}")
+    print(f"✓ Frame counts - min: {summary['frame_count_stats']['min']}, max: {summary['frame_count_stats']['max']}")
     print(f"✓ Augmentations: {', '.join(summary['augmentations_applied'])}")
     print("=" * 60)
     
