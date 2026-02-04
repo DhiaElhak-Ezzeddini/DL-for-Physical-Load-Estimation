@@ -1,0 +1,119 @@
+# VideoMAE Configuration
+# =======================
+# Configuration file for VideoMAE training with HuggingFace Transformers
+
+# Training mode: "pretrain" or "finetune"
+mode: finetune
+
+# Data configuration
+data:
+  # Path to dataset (relative to workspace or absolute)
+  data_dir: "../Augmented_Dataset"
+  
+  # Number of frames to sample per video
+  num_frames: 16
+  
+  # Frame sampling rate (sample every N frames)
+  frame_sample_rate: 4
+  
+  # Input image size
+  image_size: 224
+  
+  # Train/val split ratio
+  train_ratio: 0.8
+  
+  # Class names for classification (comma-separated or null for auto-discovery)
+  class_names: "empty,light,heavy"
+  
+  # Number of clips to extract per video (multiplies dataset size)
+  num_clips: 4
+
+# Model configuration
+model:
+  # Model name: videomae-small, videomae-base, videomae-large
+  name: videomae-base
+  
+  # Number of classes (for classification)
+  num_classes: 3
+  
+  # Load pretrained weights from HuggingFace
+  from_pretrained: true
+  
+  # Path to custom pretrained checkpoint (optional)
+  pretrained_path: null
+  
+  # Freeze encoder during fine-tuning
+  freeze_encoder: false
+  
+  # Mask ratio for pretraining (0.9 = 90% masked)
+  mask_ratio: 0.9
+
+# Training configuration
+training:
+  # Batch size per GPU
+  batch_size: 4
+  
+  # Number of epochs
+  epochs: 50
+  
+  # Learning rate
+  learning_rate: 1.0e-4
+  
+  # Weight decay
+  weight_decay: 0.05
+  
+  # Gradient accumulation steps (effective batch = batch_size * grad_accum)
+  grad_accum_steps: 4
+  
+  # Number of data loading workers
+  num_workers: 4
+  
+  # Use mixed precision (fp16)
+  mixed_precision: true
+
+# Optimizer configuration
+optimizer:
+  # Optimizer type: adamw, adam, sgd
+  type: adamw
+  
+  # AdamW betas
+  betas: [0.9, 0.999]
+  
+  # Epsilon for numerical stability
+  eps: 1.0e-8
+
+# Scheduler configuration
+scheduler:
+  # Scheduler type: cosine, linear, constant
+  type: cosine
+  
+  # Warmup epochs
+  warmup_epochs: 5
+  
+  # Minimum learning rate ratio
+  min_lr_ratio: 0.01
+
+# Checkpoint configuration
+checkpoint:
+  # Output directory for checkpoints
+  output_dir: "./checkpoints"
+  
+  # Save checkpoint every N epochs
+  save_every: 5
+  
+  # Maximum number of checkpoints to keep
+  max_checkpoints: 3
+  
+  # Resume from checkpoint (path or null)
+  resume: null
+
+# Logging configuration
+logging:
+  # Log every N steps
+  log_every: 10
+  
+  # Use wandb for logging
+  use_wandb: false
+  
+  # Wandb project name
+  wandb_project: "videomae-vload"
