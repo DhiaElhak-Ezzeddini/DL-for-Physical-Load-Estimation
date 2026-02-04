@@ -1,5 +1,9 @@
 Preprocessed*
-dataset*
+*ataset*/
 *.npy
 *.mp4
 *.pt
+__pycache*
+Keypoints*
+*.zip
+*swin*
