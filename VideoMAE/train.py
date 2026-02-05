@@ -407,12 +407,16 @@ def train_finetune_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     epoch: int,
+    label_smoothing: float = 0.1,
     is_main_process: bool = True,
 ) -> tuple:
-    """Train one epoch for classification."""
+    """Train one epoch for classification with label smoothing."""
     model.train()
     loss_meter = AverageMeter()
     acc_meter = AverageMeter()
+    
+    # Create loss function with label smoothing
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     
     pbar = tqdm(dataloader, desc=f"Epoch {epoch} [Train]", disable=not is_main_process)
     
@@ -422,9 +426,11 @@ def train_finetune_epoch(
         
         optimizer.zero_grad()
         
-        outputs = model(pixel_values=pixel_values, labels=labels)
-        # Handle DDP: loss is already reduced, but take mean for safety
-        loss = outputs.loss.mean()
+        # Forward pass without labels to get logits
+        outputs = model(pixel_values=pixel_values)
+        
+        # Compute loss with label smoothing
+        loss = criterion(outputs.logits, labels)
         
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -535,6 +541,8 @@ def finetune(args: argparse.Namespace) -> None:
         image_size=args.image_size,
         from_pretrained=not args.pretrained_path,  # Use HF pretrained if no custom checkpoint
         freeze_encoder=args.freeze_encoder,
+        dropout=args.dropout,
+        label_smoothing=args.label_smoothing,
     )
     
     # Load custom pretrained weights if provided
@@ -582,6 +590,7 @@ def finetune(args: argparse.Namespace) -> None:
         
         train_loss, train_acc = train_finetune_epoch(
             model, train_loader, optimizer, device, epoch,
+            label_smoothing=args.label_smoothing,
             is_main_process=is_main_process(rank),
         )
         
@@ -639,6 +648,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pretrained_path", type=str, default=None,help="Path to custom pretrained checkpoint")
     parser.add_argument("--freeze_encoder", action="store_true",help="Freeze encoder during fine-tuning")
     parser.add_argument("--mask_ratio", type=float, default=0.9,help="Mask ratio for pretraining")
+    parser.add_argument("--label_smoothing", type=float, default=0.1,help="Label smoothing factor (0.0-0.3 recommended)")
+    parser.add_argument("--dropout", type=float, default=0.5,help="Dropout rate for classifier head")
     
     # Training
     parser.add_argument("--batch_size", type=int, default=8,help="Batch size")

@@ -141,6 +141,8 @@ def create_videomae_for_classification(
     from_pretrained: bool = True,
     pretrained_model_name: Optional[str] = None,
     freeze_encoder: bool = False,
+    dropout: float = 0.5,
+    label_smoothing: float = 0.1,
 ) -> VideoMAEForVideoClassification:
     """
     Create VideoMAE model for video classification.
@@ -153,6 +155,8 @@ def create_videomae_for_classification(
         from_pretrained: Load pretrained encoder weights
         pretrained_model_name: Specific pretrained model to load
         freeze_encoder: Whether to freeze encoder weights
+        dropout: Dropout rate for classifier (higher = more regularization)
+        label_smoothing: Label smoothing factor (0.1-0.3 reduces overconfidence)
         
     Returns:
         VideoMAEForVideoClassification model
@@ -182,6 +186,13 @@ def create_videomae_for_classification(
         )
         model = VideoMAEForVideoClassification(config)
     
+    # Apply higher dropout to classifier head to prevent overfitting
+    if hasattr(model, 'classifier') and hasattr(model.classifier, 'dropout'):
+        model.classifier.dropout = nn.Dropout(dropout)
+    
+    # Store label smoothing for loss computation
+    model.config.label_smoothing = label_smoothing
+    
     if freeze_encoder:
         print("Freezing encoder weights...")
         for param in model.videomae.parameters():
@@ -193,6 +204,7 @@ def create_videomae_for_classification(
     print(f"Created VideoMAE classifier: {num_classes} classes")
     print(f"  - Total params: {total_params / 1e6:.1f}M")
     print(f"  - Trainable params: {trainable_params / 1e6:.1f}M")
+    print(f"  - Dropout: {dropout}, Label smoothing: {label_smoothing}")
     
     return model
 

@@ -162,11 +162,52 @@ class BaseVideoDataset(Dataset):
         return torch.from_numpy(video).permute(3, 0, 1, 2).float()
     
     def _apply_augmentation(self, video: np.ndarray, flip_only: bool = False) -> np.ndarray:
-        """Apply data augmentation."""
+        """Apply aggressive data augmentation to prevent person memorization."""
+        # Horizontal flip
         if random.random() > 0.5:
             video = video[:, :, ::-1, :].copy()
-        if not flip_only and random.random() > 0.5:
+        
+        if flip_only:
+            return video
+        
+        # Temporal flip (reverse video)
+        if random.random() > 0.5:
             video = video[::-1].copy()
+        
+        # Random spatial crop (instead of center crop) - forces model to focus on motion
+        if random.random() > 0.3:
+            h, w = video.shape[1], video.shape[2]
+            crop_size = int(min(h, w) * random.uniform(0.7, 0.95))
+            top = random.randint(0, h - crop_size)
+            left = random.randint(0, w - crop_size)
+            video = video[:, top:top+crop_size, left:left+crop_size, :]
+            # Resize back
+            if CV2_AVAILABLE:
+                video = np.stack([cv2.resize(f, (self.image_size, self.image_size)) for f in video])
+        
+        # Color jitter (reduces reliance on clothing color)
+        if random.random() > 0.5:
+            # Brightness
+            video = np.clip(video * random.uniform(0.7, 1.3), 0, 255).astype(np.uint8)
+        if random.random() > 0.5:
+            # Contrast
+            mean = video.mean()
+            video = np.clip((video - mean) * random.uniform(0.7, 1.3) + mean, 0, 255).astype(np.uint8)
+        
+        # Random grayscale (removes color information entirely)
+        if random.random() > 0.7:
+            gray = np.mean(video, axis=-1, keepdims=True)
+            video = np.repeat(gray, 3, axis=-1).astype(np.uint8)
+        
+        # Random erasing (occludes parts of the person)
+        if random.random() > 0.5:
+            h, w = video.shape[1], video.shape[2]
+            erase_h = int(h * random.uniform(0.1, 0.3))
+            erase_w = int(w * random.uniform(0.1, 0.3))
+            top = random.randint(0, h - erase_h)
+            left = random.randint(0, w - erase_w)
+            video[:, top:top+erase_h, left:left+erase_w, :] = 128  # Gray patch
+        
         return video
 
 
